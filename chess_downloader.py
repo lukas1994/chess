@@ -811,8 +811,8 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
                 SUM(CASE WHEN won THEN 1 ELSE 0 END)*100.0/COUNT(*) as win_rate
             FROM (
                 SELECT 
-                    CASE WHEN white_player = ? THEN white_rating - black_rating
-                         ELSE black_rating - white_rating
+                    CASE WHEN white_player = ? THEN black_rating - white_rating
+                         ELSE white_rating - black_rating
                     END as rating_diff,
                     CASE WHEN (white_player = ? AND result = '1-0') OR 
                               (black_player = ? AND result = '0-1') THEN 1
@@ -851,6 +851,25 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
         ''', (self.username, self.username))
         time_of_day = cursor.fetchall()
 
+        # Opening Win Rates
+        cursor.execute('''
+            SELECT 
+                la.opening,
+                COUNT(*) as games,
+                SUM(CASE WHEN (g.white_player = ? AND g.result = '1-0') OR 
+                         (g.black_player = ? AND g.result = '0-1') THEN 1 ELSE 0 END)*100.0/COUNT(*) as win_rate
+            FROM llm_analysis la
+            JOIN games g ON la.game_id = g.id
+            WHERE la.opening IS NOT NULL  -- Only include games with analysis
+            AND g.rules = 'chess' 
+            AND g.rated = 1
+            GROUP BY la.opening
+            HAVING COUNT(*) >= 2  -- Changed from 5 to 2
+            ORDER BY games DESC
+            LIMIT 10
+        ''', (self.username, self.username))
+        opening_stats = cursor.fetchall()
+        
         # Define charts section
         charts = f"""
     <div class="stats-grid">
@@ -922,6 +941,12 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
             <h2>Time of Day Performance</h2>
             <div class="chart-container">
                 <canvas id="timeOfDayChart"></canvas>
+            </div>
+        </div>
+        <div class="card">
+            <h2>Opening Win Rates</h2>
+            <div class="chart-container">
+                <canvas id="openingWinRatesChart"></canvas>
             </div>
         </div>
     </div>
@@ -1247,6 +1272,24 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
                             text: 'Win Rate %'
                         }}
                     }}
+                }},
+                plugins: {{
+                    tooltip: {{
+                        callbacks: {{
+                            label: function(context) {{
+                                const labels = {{
+                                    'Much Weaker': 'Opponent rated 200+ points lower',
+                                    'Weaker': 'Opponent rated 100-200 points lower',
+                                    'Equal': 'Rating difference within 100 points',
+                                    'Stronger': 'Opponent rated 100-200 points higher',
+                                    'Much Stronger': 'Opponent rated 200+ points higher'
+                                }};
+                                const label = context.label;
+                                const value = context.raw.toFixed(1) + '% win rate';
+                                return [value, labels[label]];
+                            }}
+                        }}
+                    }}
                 }}
             }}
         }});""", f"""
@@ -1259,15 +1302,14 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
                 datasets: [{{
                     label: 'Win Rate %',
                     data: {[tod[2] for tod in time_of_day]},
-                    borderColor: '#9C27B0',
-                    fill: false,
-                    tension: 0.1
+                    backgroundColor: '#2ecc71',
+                    borderWidth: 0,
+                    yAxisID: 'y'
                 }}, {{
                     label: 'Games Played',
                     data: {[tod[1] for tod in time_of_day]},
-                    borderColor: '#00BCD4',
-                    fill: false,
-                    tension: 0.1,
+                    backgroundColor: '#3498db',
+                    borderWidth: 0,
                     yAxisID: 'y1'
                 }}]
             }},
@@ -1277,7 +1319,9 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
                         title: {{
                             display: true,
                             text: 'Win Rate %'
-                        }}
+                        }},
+                        beginAtZero: true,
+                        max: 100
                     }},
                     y1: {{
                         position: 'right',
@@ -1287,6 +1331,63 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
                         }},
                         grid: {{
                             drawOnChartArea: false
+                        }},
+                        beginAtZero: true
+                    }}
+                }}
+            }}
+        }});""", f"""
+
+        // Opening Win Rates Chart
+        new Chart(document.getElementById('openingWinRatesChart'), {{
+            type: 'bar',
+            data: {{
+                labels: {[op[0] for op in opening_stats]},
+                datasets: [{{
+                    label: 'Win Rate %',
+                    data: {[op[2] for op in opening_stats]},
+                    backgroundColor: '#2ecc71',
+                    yAxisID: 'y'
+                }}, {{
+                    label: 'Games Played',
+                    data: {[op[1] for op in opening_stats]},
+                    backgroundColor: '#3498db',
+                    yAxisID: 'y1'
+                }}]
+            }},
+            options: {{
+                indexAxis: 'y',  // Make it horizontal
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        title: {{
+                            display: true,
+                            text: 'Opening'
+                        }}
+                    }},
+                    x: {{
+                        title: {{
+                            display: true,
+                            text: 'Win Rate %'
+                        }}
+                    }},
+                    y1: {{
+                        position: 'right',
+                        beginAtZero: true,
+                        grid: {{
+                            drawOnChartArea: false
+                        }}
+                    }}
+                }},
+                plugins: {{
+                    tooltip: {{
+                        callbacks: {{
+                            label: function(context) {{
+                                if (context.dataset.label === 'Win Rate %') {{
+                                    return `Win Rate: ${{context.raw.toFixed(1)}}%`;
+                                }}
+                                return `Games: ${{context.raw}}`;
+                            }}
                         }}
                     }}
                 }}
@@ -1298,7 +1399,7 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
 """])
 
         # Combine all parts
-        html = header + overall_stats + peak_ratings_html + charts + scripts
+        html = header + overall_stats + charts + scripts
 
         # Write to file
         with open('results.html', 'w') as f:
