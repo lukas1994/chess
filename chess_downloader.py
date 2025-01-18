@@ -750,47 +750,6 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
             'data': [tc[1] for tc in time_control_stats]
         }
 
-        # Add to scripts
-        scripts_time_control = f"""
-        // Time Control Chart
-        new Chart(document.getElementById('timeControlChart'), {{
-            type: 'doughnut',
-            data: {{
-                labels: {time_control_data['labels']},
-                datasets: [{{
-                    data: {time_control_data['data']},
-                    backgroundColor: ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEEAD'],
-                    borderWidth: 0
-                }}]
-            }},
-            options: {{
-                cutout: '60%',
-                plugins: {{
-                    legend: {{
-                        position: 'bottom',
-                        labels: {{
-                            padding: 20,
-                            font: {{
-                                size: 14
-                            }}
-                        }}
-                    }},
-                    title: {{
-                        display: true,
-                        text: 'Games by Time Control',
-                        font: {{
-                            size: 16,
-                            weight: 'normal'
-                        }}
-                    }}
-                }},
-                layout: {{
-                    padding: 20
-                }}
-            }}
-        }});
-"""
-
         # Add highest rating query
         cursor.execute('''
             SELECT 
@@ -826,198 +785,122 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
             rating_series[time_class]['timestamps'].append(timestamp * 1000)  # Convert to milliseconds for JS
             rating_series[time_class]['ratings'].append(rating)
 
-        conn.close()
-        
-        # Generate HTML in parts
-        header = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Chess Analysis Report - {self.username}</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@400;500;600&display=swap">
-    <style>
-        :root {{
-            --primary-bg: #ffffff;
-            --secondary-bg: #f5f5f7;
-            --text-primary: #1d1d1f;
-            --text-secondary: #86868b;
-            --accent-blue: #0071e3;
-            --card-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-        }}
-        
-        body {{
-            font-family: "SF Pro Display", -apple-system, BlinkMacSystemFont, sans-serif;
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 40px 20px;
-            background-color: var(--secondary-bg);
-            color: var(--text-primary);
-            line-height: 1.47059;
-            font-weight: 400;
-            letter-spacing: -0.022em;
-        }}
-        
-        .header {{
-            text-align: center;
-            margin-bottom: 60px;
-        }}
-        
-        h1 {{
-            font-size: 48px;
-            font-weight: 600;
-            letter-spacing: -0.003em;
-            margin-bottom: 8px;
-        }}
-        
-        .subtitle {{
-            font-size: 24px;
-            color: var(--text-secondary);
-            font-weight: 400;
-            margin-top: 0;
-        }}
-        
-        .card {{
-            background-color: var(--primary-bg);
-            border-radius: 18px;
-            padding: 30px;
-            margin-bottom: 30px;
-            box-shadow: var(--card-shadow);
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-        }}
-        
-        .card:hover {{
-            transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
-        }}
-        
-        .chart-container {{
-            position: relative;
-            height: 300px;
-            margin: 20px 0;
-        }}
-        
-        h2 {{
-            font-size: 24px;
-            font-weight: 500;
-            margin: 0 0 20px 0;
-            color: var(--text-primary);
-        }}
-        
-        .stats-grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-            gap: 30px;
-            margin-bottom: 30px;
-        }}
-        
-        .stat-value {{
-            font-size: 36px;
-            font-weight: 600;
-            color: var(--accent-blue);
-            margin: 10px 0 5px 0;
-        }}
-        
-        .stat-label {{
-            font-size: 17px;
-            color: var(--text-secondary);
-            margin: 0;
-        }}
-        
-        .peak-ratings {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-            gap: 20px;
-            margin-top: 20px;
-        }}
-        
-        .peak-rating-item {{
-            text-align: center;
-        }}
-        
-        @media (max-width: 768px) {{
-            body {{
-                padding: 20px 10px;
-            }}
-            
-            h1 {{
-                font-size: 36px;
-            }}
-            
-            .subtitle {{
-                font-size: 20px;
-            }}
-            
-            .stats-grid {{
-                grid-template-columns: 1fr;
-            }}
-        }}
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h1>Chess Analysis Report</h1>
-        <p class="subtitle">{self.username}'s Performance Overview</p>
-    </div>
-"""
+        # Time Management Performance
+        cursor.execute('''
+            SELECT 
+                time_class,
+                AVG(CASE WHEN white_player = ? THEN white_accuracy ELSE black_accuracy END) as avg_accuracy,
+                COUNT(*) as games
+            FROM games
+            WHERE rules = 'chess' AND rated = 1 AND white_accuracy IS NOT NULL
+            GROUP BY time_class
+        ''', (self.username,))
+        time_management = cursor.fetchall()
 
-        overall_stats = f"""
-    <div class="stats-grid">
-        <div class="card">
-            <h2>Overall Record</h2>
-            <div class="chart-container">
-                <canvas id="overallChart"></canvas>
-            </div>
-            <div class="stat-value">{total}</div>
-            <p class="stat-label">Total Games Played</p>
-            <div class="stat-value">{int(avg_rating)}</div>
-            <p class="stat-label">Average Rating</p>
-        </div>
-"""
+        # Performance by Rating Difference
+        cursor.execute('''
+            SELECT 
+                CASE 
+                    WHEN rating_diff <= -200 THEN 'Much Weaker'
+                    WHEN rating_diff <= -100 THEN 'Weaker'
+                    WHEN rating_diff < 100 THEN 'Equal'
+                    WHEN rating_diff < 200 THEN 'Stronger'
+                    ELSE 'Much Stronger'
+                END as opponent_strength,
+                COUNT(*) as games,
+                SUM(CASE WHEN won THEN 1 ELSE 0 END)*100.0/COUNT(*) as win_rate
+            FROM (
+                SELECT 
+                    CASE WHEN white_player = ? THEN white_rating - black_rating
+                         ELSE black_rating - white_rating
+                    END as rating_diff,
+                    CASE WHEN (white_player = ? AND result = '1-0') OR 
+                              (black_player = ? AND result = '0-1') THEN 1
+                         ELSE 0
+                    END as won
+                FROM games
+                WHERE rules = 'chess' AND rated = 1
+            )
+            GROUP BY opponent_strength
+            ORDER BY MIN(rating_diff)
+        ''', (self.username, self.username, self.username))
+        rating_performance = cursor.fetchall()
 
-        peak_ratings_html = """
-        <div class="card">
-            <h2>Peak Ratings</h2>
-            <div class="peak-ratings">
-"""
-        for time_class, rating in peak_ratings:
-            peak_ratings_html += f"""
-                <div class="peak-rating-item">
-                    <div class="stat-value">{rating}</div>
-                    <p class="stat-label">{time_class.title()}</p>
-                </div>
-"""
-        peak_ratings_html += """
-            </div>
-        </div>
-    </div>
-"""
+        # Time of Day Analysis
+        cursor.execute('''
+            SELECT 
+                CASE 
+                    WHEN strftime('%H', datetime(timestamp, 'unixepoch')) BETWEEN '06' AND '11' THEN 'Morning'
+                    WHEN strftime('%H', datetime(timestamp, 'unixepoch')) BETWEEN '12' AND '17' THEN 'Afternoon'
+                    WHEN strftime('%H', datetime(timestamp, 'unixepoch')) BETWEEN '18' AND '23' THEN 'Evening'
+                    ELSE 'Night'
+                END as time_of_day,
+                COUNT(*) as games,
+                SUM(CASE WHEN (white_player = ? AND result = '1-0') OR 
+                             (black_player = ? AND result = '0-1') THEN 1 ELSE 0 END)*100.0/COUNT(*) as win_rate
+            FROM games
+            WHERE rules = 'chess' AND rated = 1
+            GROUP BY time_of_day
+            ORDER BY 
+                CASE time_of_day 
+                    WHEN 'Morning' THEN 1 
+                    WHEN 'Afternoon' THEN 2 
+                    WHEN 'Evening' THEN 3 
+                    ELSE 4 
+                END
+        ''', (self.username, self.username))
+        time_of_day = cursor.fetchall()
 
+        # Define charts section
         charts = f"""
-    <div class="card">
-        <h2>Rating History</h2>
-        <div class="chart-container" style="height: 400px;">
-            <canvas id="ratingChart"></canvas>
-        </div>
-    </div>
-    
     <div class="stats-grid">
+        <div class="card">
+            <h2>Rating History</h2>
+            <div class="chart-container">
+                <canvas id="ratingChart"></canvas>
+            </div>
+        </div>
+        
         <div class="card">
             <h2>Performance by Color</h2>
             <div class="chart-container">
                 <canvas id="colorChart"></canvas>
             </div>
         </div>
-        
+    </div>
+
+    <div class="stats-grid">
         <div class="card">
             <h2>Most Common Openings</h2>
             <div class="chart-container">
                 <canvas id="openingsChart"></canvas>
             </div>
         </div>
+        
+        <div class="card">
+            <h2>Time Control Distribution</h2>
+            <div class="chart-container">
+                <canvas id="timeControlChart"></canvas>
+            </div>
+        </div>
     </div>
-    
+
+    <div class="stats-grid">
+        <div class="card">
+            <h2>Time Management Performance</h2>
+            <div class="chart-container">
+                <canvas id="timeManagementChart"></canvas>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h2>Performance by Rating Difference</h2>
+            <div class="chart-container">
+                <canvas id="ratingDiffChart"></canvas>
+            </div>
+        </div>
+    </div>
+
     <div class="stats-grid">
         <div class="card">
             <h2>Common Mistakes</h2>
@@ -1033,12 +916,12 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
             </div>
         </div>
     </div>
-    
+
     <div class="stats-grid">
         <div class="card">
-            <h2>Time Control Distribution</h2>
+            <h2>Time of Day Performance</h2>
             <div class="chart-container">
-                <canvas id="timeControlChart"></canvas>
+                <canvas id="timeOfDayChart"></canvas>
             </div>
         </div>
     </div>
@@ -1070,11 +953,74 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
                 }}"""
                 rating_datasets.append(dataset)
 
-        scripts = f"""
+        # Define header with CSS and chart.js includes
+        header = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Chess Analysis Report - {self.username}</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@400;500;600&display=swap">
+    <style>
+        body {{ font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif; padding: 20px; }}
+        .header {{ text-align: center; margin-bottom: 40px; }}
+        .subtitle {{ color: #666; }}
+        .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; margin-bottom: 20px; }}
+        .card {{ background: white; border-radius: 10px; padding: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+        .chart-container {{ position: relative; height: 300px; margin: 20px 0; }}
+        .stat-value {{ font-size: 24px; font-weight: 500; margin: 10px 0 5px; }}
+        .stat-label {{ color: #666; margin: 0; }}
+        .peak-ratings {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 20px; }}
+        .peak-rating-item {{ text-align: center; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Chess Analysis Report</h1>
+        <p class="subtitle">{self.username}'s Performance Overview</p>
+    </div>
+"""
+
+        # Define peak ratings section
+        peak_ratings_html = """
+        <div class="card">
+            <h2>Peak Ratings</h2>
+            <div class="peak-ratings">
+"""
+        for time_class, rating in peak_ratings:
+            peak_ratings_html += f"""
+                <div class="peak-rating-item">
+                    <div class="stat-value">{rating}</div>
+                    <p class="stat-label">{time_class.title()}</p>
+                </div>
+"""
+        peak_ratings_html += """
+            </div>
+    </div>
+"""
+        # Define overall stats section
+        overall_stats = f"""
+    <div class="stats-grid">
+        <div class="card">
+            <h2>Overall Record</h2>
+            <div class="chart-container">
+                <canvas id="overallChart"></canvas>
+            </div>
+            <div class="stat-value">{total}</div>
+            <p class="stat-label">Total Games Played</p>
+            <div class="stat-value">{int(avg_rating)}</div>
+            <p class="stat-label">Average Rating</p>
+        </div>
+        {peak_ratings_html}
+    </div>
+"""
+
+
+        scripts = "".join([f"""
     <script>
         Chart.defaults.font.family = "'SF Pro Display', -apple-system, BlinkMacSystemFont, sans-serif";
         Chart.defaults.font.size = 14;
-        
+        """, f"""
         // Overall Record Chart
         new Chart(document.getElementById('overallChart'), {{
             type: 'doughnut',
@@ -1094,7 +1040,7 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
                     }}
                 }}
             }}
-        }});
+        }});""", f"""
         
         // Color Performance Chart
         new Chart(document.getElementById('colorChart'), {{
@@ -1123,7 +1069,7 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
                     y: {{ stacked: true }}
                 }}
             }}
-        }});
+        }});""", f"""
         
         // Openings Chart
         new Chart(document.getElementById('openingsChart'), {{
@@ -1135,7 +1081,7 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
                     backgroundColor: ['#FF9800', '#2196F3', '#9C27B0', '#00BCD4', '#795548']
                 }}]
             }}
-        }});
+        }});""", f"""
         
         // Mistakes Chart
         new Chart(document.getElementById('mistakesChart'), {{
@@ -1150,7 +1096,7 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
             options: {{
                 indexAxis: 'y'
             }}
-        }});
+        }});""", f"""
         
         // Blunder Timing Chart
         new Chart(document.getElementById('blunderChart'), {{
@@ -1164,7 +1110,7 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
                     tension: 0.1
                 }}]
             }}
-        }});
+        }});""", f"""
         
         // Time Control Chart
         new Chart(document.getElementById('timeControlChart'), {{
@@ -1202,7 +1148,7 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
                     padding: 20
                 }}
             }}
-        }});
+        }});""", f"""
         
         // Rating History Chart
         new Chart(document.getElementById('ratingChart'), {{
@@ -1236,11 +1182,120 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
                     }}
                 }}
             }}
+        }});""", f"""
+
+        // Time Management Performance Chart
+        new Chart(document.getElementById('timeManagementChart'), {{
+            type: 'bar',
+            data: {{
+                labels: {[tc[0].title() for tc in time_management]},
+                datasets: [{{
+                    label: 'Average Accuracy',
+                    data: {[tc[1] for tc in time_management]},
+                    backgroundColor: '#4CAF50',
+                    yAxisID: 'y'
+                }}, {{
+                    label: 'Games Played',
+                    data: {[tc[2] for tc in time_management]},
+                    backgroundColor: '#2196F3',
+                    yAxisID: 'y1'
+                }}]
+            }},
+            options: {{
+                scales: {{
+                    y: {{
+                        type: 'linear',
+                        position: 'left',
+                        title: {{
+                            display: true,
+                            text: 'Accuracy %'
+                        }}
+                    }},
+                    y1: {{
+                        type: 'linear',
+                        position: 'right',
+                        title: {{
+                            display: true,
+                            text: 'Games'
+                        }},
+                        grid: {{
+                            drawOnChartArea: false
+                        }}
+                    }}
+                }}
+            }}
+        }});""", f"""
+
+        // Rating Difference Performance Chart
+        new Chart(document.getElementById('ratingDiffChart'), {{
+            type: 'bar',
+            data: {{
+                labels: {[rp[0] for rp in rating_performance]},
+                datasets: [{{
+                    label: 'Win Rate %',
+                    data: {[rp[2] for rp in rating_performance]},
+                    backgroundColor: '#FF9800'
+                }}]
+            }},
+            options: {{
+                scales: {{
+                    y: {{
+                        beginAtZero: true,
+                        max: 100,
+                        title: {{
+                            display: true,
+                            text: 'Win Rate %'
+                        }}
+                    }}
+                }}
+            }}
+        }});""", f"""
+
+        // Time of Day Performance Chart
+        new Chart(document.getElementById('timeOfDayChart'), {{
+            type: 'bar',
+            data: {{
+                labels: {[tod[0] for tod in time_of_day]},
+                datasets: [{{
+                    label: 'Win Rate %',
+                    data: {[tod[2] for tod in time_of_day]},
+                    borderColor: '#9C27B0',
+                    fill: false,
+                    tension: 0.1
+                }}, {{
+                    label: 'Games Played',
+                    data: {[tod[1] for tod in time_of_day]},
+                    borderColor: '#00BCD4',
+                    fill: false,
+                    tension: 0.1,
+                    yAxisID: 'y1'
+                }}]
+            }},
+            options: {{
+                scales: {{
+                    y: {{
+                        title: {{
+                            display: true,
+                            text: 'Win Rate %'
+                        }}
+                    }},
+                    y1: {{
+                        position: 'right',
+                        title: {{
+                            display: true,
+                            text: 'Games'
+                        }},
+                        grid: {{
+                            drawOnChartArea: false
+                        }}
+                    }}
+                }}
+            }}
         }});
     </script>
 </body>
 </html>
-"""
+"""])
 
         # Combine all parts
         html = header + overall_stats + peak_ratings_html + charts + scripts
