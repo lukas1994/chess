@@ -295,8 +295,15 @@ class ChessComDownloader:
         conn.close()
         return count
 
-    def analyze_game(self, game_id, pgn_text, depth=20):
-        """Analyze a game with Stockfish"""
+    def analyze_game(self, game_id, pgn_text, depth=20, time_per_move=0.2):
+        """Analyze a game with Stockfish
+        
+        Args:
+            game_id (int): ID of the game to analyze
+            pgn_text (str): PGN text of the game
+            depth (int): Analysis depth for Stockfish
+            time_per_move (float): Time in seconds to spend analyzing each move
+        """
         engine = None
         conn = None
         try:
@@ -325,7 +332,7 @@ class ChessComDownloader:
                 
                 try:
                     print(f"\nAnalyzing move {i+1} ({move_san}):")
-                    info = engine.analyse(board, chess.engine.Limit(depth=depth, time=1.0))
+                    info = engine.analyse(board, chess.engine.Limit(depth=depth, time=time_per_move))
                     
                     # Get score from White's perspective
                     score = info["score"].white()
@@ -382,35 +389,43 @@ class ChessComDownloader:
                 except:
                     pass
 
-    def analyze_all_games(self, depth=20, limit=None):
-        """Analyze games in the database that haven't been analyzed yet
+    def analyze_all_games(self, depth=20, time_per_move=1.0, limit=None):
+        """Analyze recent games in the database that haven't been analyzed yet
         
         Args:
             depth (int): Analysis depth for Stockfish
+            time_per_move (float): Time in seconds to spend analyzing each move
             limit (int, optional): Maximum number of games to analyze. If None, analyze all games.
         """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Get games without analysis
+        # Get unanalyzed games from the last 30 days
         cursor.execute('''
-            SELECT g.id, g.pgn 
+            SELECT DISTINCT g.id, g.pgn 
             FROM games g
             LEFT JOIN engine_analysis ea ON g.id = ea.game_id
-            WHERE ea.id IS NULL
+            WHERE ea.id IS NULL  -- Only get games without any analysis
+            AND g.timestamp >= strftime('%s', 'now', '-30 days')
+            AND g.rules = 'chess'
+            AND g.rated = 1
+            AND NOT EXISTS (  -- Ensure no moves have been analyzed for this game
+                SELECT 1 FROM engine_analysis 
+                WHERE game_id = g.id
+            )
             ORDER BY g.timestamp DESC
             LIMIT ?
-        ''', (limit if limit else -1,))  # SQLite uses -1 to mean no limit
+        ''', (limit if limit else -1,))
         
         games = cursor.fetchall()
         conn.close()
         
-        print(f"Found {len(games)} games to analyze" + 
+        print(f"Found {len(games)} unanalyzed recent games" + 
               f" (limit: {limit if limit else 'unlimited'})")
         
         for game_id, pgn in games:
-            print(f"Analyzing game {game_id}...")
-            self.analyze_game(game_id, pgn, depth)
+            print(f"\nAnalyzing game {game_id}...")
+            self.analyze_game(game_id, pgn, depth, time_per_move)
 
     def print_game_with_analysis(self, game_id):
         """Return a game with move by move evaluations and timings as a string"""
@@ -1410,11 +1425,11 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
 if __name__ == "__main__":
     downloader = ChessComDownloader("lukas19940000")
     # print(f"\nTotal games in database: {downloader.count_total_games()}")
-    # downloader.clear_analysis()
-    # downloader.analyze_all_games(depth=20, limit=5)
+    downloader.clear_analysis()
+    downloader.analyze_all_games(depth=20)
     # downloader.delete_database()
     # downloader.download_all_games(limit=None)
-    # downloader.analyze_all_games_with_llm()  # Analyze all games that have engine analysis
+    downloader.analyze_all_games_with_llm()
     # downloader.analyze_game_with_llm(45) 
-    downloader.generate_html_report()
+    # downloader.generate_html_report()
     # downloader.generate_statistics() 
