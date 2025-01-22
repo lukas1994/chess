@@ -295,7 +295,7 @@ class ChessComDownloader:
         conn.close()
         return count
 
-    def analyze_game(self, game_id, pgn_text, depth=20, time_per_move=0.2):
+    def analyze_game(self, game_id, pgn_text, depth=20, time_per_move=0.2, verbose=False):
         """Analyze a game with Stockfish
         
         Args:
@@ -303,27 +303,29 @@ class ChessComDownloader:
             pgn_text (str): PGN text of the game
             depth (int): Analysis depth for Stockfish
             time_per_move (float): Time in seconds to spend analyzing each move
+            verbose (bool): Whether to print analysis details
         """
         engine = None
         conn = None
         try:
-            print(f"\nStarting analysis of game {game_id}")
+            if verbose: print(f"\nStarting analysis of game {game_id}")
             engine = chess.engine.SimpleEngine.popen_uci(self.engine_path)
             engine.configure({"Threads": 2, "Hash": 128})
-            print(f"Engine initialized: {self.engine_path}")
+            if verbose: print(f"Engine initialized: {self.engine_path}")
 
             game = chess.pgn.read_game(io.StringIO(pgn_text))
             if not game:
-                print(f"Could not parse PGN for game {game_id}")
+                if verbose: print(f"Could not parse PGN for game {game_id}")
                 return
 
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
 
             # Log game headers
-            print(f"Game: {game.headers.get('White')} vs {game.headers.get('Black')}")
-            print(f"Opening: {game.headers.get('ECO', 'Unknown')} - {game.headers.get('Opening', 'Unknown')}")
-            print("\nAnalyzing positions...")
+            if verbose:
+                print(f"Game: {game.headers.get('White')} vs {game.headers.get('Black')}")
+                print(f"Opening: {game.headers.get('ECO', 'Unknown')} - {game.headers.get('Opening', 'Unknown')}")
+                print("\nAnalyzing positions...")
 
             board = game.board()
             for i, move in enumerate(game.mainline_moves()):
@@ -331,7 +333,7 @@ class ChessComDownloader:
                 board.push(move)
                 
                 try:
-                    print(f"\nAnalyzing move {i+1} ({move_san}):")
+                    if verbose: print(f"\nAnalyzing move {i+1} ({move_san}):")
                     info = engine.analyse(board, chess.engine.Limit(depth=depth, time=time_per_move))
                     
                     # Get score from White's perspective
@@ -341,15 +343,16 @@ class ChessComDownloader:
                     
                     if score.is_mate():
                         mate = score.mate()
-                        print(f"  Mate in {mate}")
+                        if verbose: print(f"  Mate in {mate}")
                     else:
                         eval_cp = score.score()
-                        print(f"  Evaluation: {eval_cp/100:.2f}")
+                        if verbose: print(f"  Evaluation: {eval_cp/100:.2f}")
 
                     # Log position details
-                    print(f"  Move number: {(i // 2) + 1}")
-                    print(f"  Color to move: {'Black' if i % 2 else 'White'}")
-                    print(f"  FEN: {board.fen()}")
+                    if verbose:
+                        print(f"  Move number: {(i // 2) + 1}")
+                        print(f"  Color to move: {'Black' if i % 2 else 'White'}")
+                        print(f"  FEN: {board.fen()}")
 
                     cursor.execute('''
                         INSERT OR REPLACE INTO engine_analysis
@@ -367,46 +370,42 @@ class ChessComDownloader:
                     conn.commit()
                     
                 except Exception as e:
-                    print(f"Error analyzing move {i+1}: {str(e)}")
+                    if verbose: print(f"Error analyzing move {i+1}: {str(e)}")
                     continue
 
-            print(f"\nCompleted analysis of game {game_id}")
+            if verbose: print(f"\nCompleted analysis of game {game_id}")
 
         except Exception as e:
-            print(f"Error analyzing game {game_id}: {str(e)}")
+            if verbose: print(f"Error analyzing game {game_id}: {str(e)}")
             
         finally:
             if engine:
                 try:
                     engine.quit()
-                    print("Engine closed")
+                    if verbose: print("Engine closed")
                 except:
                     pass
             if conn:
                 try:
                     conn.close()
-                    print("Database connection closed")
+                    if verbose: print("Database connection closed")
                 except:
                     pass
 
-    def analyze_all_games(self, depth=20, time_per_move=1.0, limit=None):
-        """Analyze recent games in the database that haven't been analyzed yet
+    def analyze_all_games(self, depth=20, time_per_move=0.2, limit=None):
+        """Analyze recent games in the database that haven't been analyzed yet"""
+        start_time = time.time()
+        games_analyzed = 0
         
-        Args:
-            depth (int): Analysis depth for Stockfish
-            time_per_move (float): Time in seconds to spend analyzing each move
-            limit (int, optional): Maximum number of games to analyze. If None, analyze all games.
-        """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Get unanalyzed games from the last 30 days
+        # Get unanalyzed games query...
         cursor.execute('''
             SELECT DISTINCT g.id, g.pgn 
             FROM games g
             LEFT JOIN engine_analysis ea ON g.id = ea.game_id
             WHERE ea.id IS NULL  -- Only get games without any analysis
-            AND g.timestamp >= strftime('%s', 'now', '-30 days')
             AND g.rules = 'chess'
             AND g.rated = 1
             AND NOT EXISTS (  -- Ensure no moves have been analyzed for this game
@@ -425,7 +424,13 @@ class ChessComDownloader:
         
         for game_id, pgn in games:
             print(f"\nAnalyzing game {game_id}...")
-            self.analyze_game(game_id, pgn, depth, time_per_move)
+            self.analyze_game(game_id, pgn, depth, time_per_move, verbose=False)
+            games_analyzed += 1
+            
+            # Calculate and print analysis rate every game
+            elapsed_minutes = (time.time() - start_time) / 60
+            rate = games_analyzed / elapsed_minutes if elapsed_minutes > 0 else 0
+            print(f"\nAnalysis rate: {rate:.1f} games/minute ({games_analyzed} games in {elapsed_minutes:.1f} minutes)")
 
     def print_game_with_analysis(self, game_id):
         """Return a game with move by move evaluations and timings as a string"""
@@ -1142,13 +1147,30 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
         new Chart(document.getElementById('blunderChart'), {{
             type: 'line',
             data: {{
-                labels: {list(move_counts.keys())},
+                labels: {sorted(list(move_counts.keys()), key=lambda x: int(x.split('-')[0].replace('Moves ', '')))},
                 datasets: [{{
                     label: 'Blunders',
-                    data: {list(move_counts.values())},
+                    data: {[move_counts[k] for k in sorted(move_counts.keys(), key=lambda x: int(x.split('-')[0].replace('Moves ', '')))]},
                     borderColor: '#F44336',
                     tension: 0.1
                 }}]
+            }},
+            options: {{
+                scales: {{
+                    x: {{
+                        title: {{
+                            display: true,
+                            text: 'Move Range'
+                        }}
+                    }},
+                    y: {{
+                        title: {{
+                            display: true,
+                            text: 'Number of Blunders'
+                        }},
+                        beginAtZero: true
+                    }}
+                }}
             }}
         }});""", f"""
         
@@ -1422,14 +1444,33 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
         
         print("Report generated: results.html")
 
+    def delete_game_analysis(self, game_id):
+        """Delete engine analysis for a specific game
+        
+        Args:
+            game_id (int): ID of the game to delete analysis for
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('DELETE FROM engine_analysis WHERE game_id = ?', (game_id,))
+        deleted_count = cursor.rowcount
+        
+        conn.commit()
+        conn.close()
+        
+        print(f"Deleted {deleted_count} analysis records for game {game_id}")
+
 if __name__ == "__main__":
     downloader = ChessComDownloader("lukas19940000")
     # print(f"\nTotal games in database: {downloader.count_total_games()}")
-    downloader.clear_analysis()
-    downloader.analyze_all_games(depth=20)
+    # downloader.clear_analysis()
+    # downloader.analyze_all_games(depth=20)
+    downloader.delete_game_analysis(4070)
     # downloader.delete_database()
     # downloader.download_all_games(limit=None)
-    downloader.analyze_all_games_with_llm()
+    # downloader.analyze_all_games_with_llm()
     # downloader.analyze_game_with_llm(45) 
     # downloader.generate_html_report()
     # downloader.generate_statistics() 
+    # download garmin data as well 
