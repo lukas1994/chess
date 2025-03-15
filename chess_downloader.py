@@ -400,7 +400,14 @@ class ChessComDownloader:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Get unanalyzed games query...
+        # Get count of already analyzed games
+        cursor.execute('''
+            SELECT COUNT(DISTINCT game_id) 
+            FROM engine_analysis
+        ''')
+        already_analyzed = cursor.fetchone()[0]
+        
+        # Get unanalyzed games query
         cursor.execute('''
             SELECT DISTINCT g.id, g.pgn 
             FROM games g
@@ -419,7 +426,7 @@ class ChessComDownloader:
         games = cursor.fetchall()
         conn.close()
         
-        print(f"Found {len(games)} unanalyzed recent games" + 
+        print(f"Found {len(games)} unanalyzed games and {already_analyzed} already analyzed games" + 
               f" (limit: {limit if limit else 'unlimited'})")
         
         for game_id, pgn in games:
@@ -890,6 +897,56 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
         ''', (self.username, self.username))
         opening_stats = cursor.fetchall()
         
+        # Time Pressure Blunders
+        cursor.execute('''
+            WITH move_times AS (
+                SELECT 
+                    g.id,
+                    CAST(SUBSTR(g.time_control, 1, INSTR(g.time_control, '+') - 1) AS INTEGER) as starting_time,
+                    CASE 
+                        WHEN g.white_player = ? THEN 'player'
+                        ELSE 'opponent'
+                    END as perspective,
+                    ea.evaluation,
+                    ea.mate,
+                    CAST(NULLIF(TRIM(SUBSTR(
+                        SUBSTR(g.pgn, INSTR(g.pgn, ea.move_san) + LENGTH(ea.move_san)),
+                        INSTR(SUBSTR(g.pgn, INSTR(g.pgn, ea.move_san) + LENGTH(ea.move_san)), '[%clk') + 6,
+                        6
+                    )), '') AS FLOAT) as time_left
+                FROM games g
+                JOIN engine_analysis ea ON g.id = ea.game_id
+                WHERE g.time_control LIKE '%+%'  -- Only games with increment time control
+                AND g.rules = 'chess'
+                AND g.rated = 1
+                AND g.pgn LIKE '%[%clk%'  -- Only games with clock information
+            )
+            SELECT 
+                CASE 
+                    WHEN time_left/starting_time <= 0.1 THEN '< 10%'
+                    WHEN time_left/starting_time <= 0.25 THEN '10-25%'
+                    WHEN time_left/starting_time <= 0.50 THEN '25-50%'
+                    ELSE '> 50%'
+                END as time_remaining,
+                COUNT(*) as total_positions,
+                SUM(CASE 
+                    WHEN (evaluation <= -150 OR mate < 0) 
+                    AND perspective = 'player' THEN 1 
+                    ELSE 0 
+                END) as blunders
+            FROM move_times
+            WHERE time_left IS NOT NULL
+            GROUP BY 
+                CASE 
+                    WHEN time_left/starting_time <= 0.1 THEN '< 10%'
+                    WHEN time_left/starting_time <= 0.25 THEN '10-25%'
+                    WHEN time_left/starting_time <= 0.50 THEN '25-50%'
+                    ELSE '> 50%'
+                END
+            ORDER BY MIN(time_left/starting_time)
+        ''', (self.username,))
+        time_pressure_stats = cursor.fetchall()
+
         # Define charts section
         charts = f"""
     <div class="stats-grid">
@@ -967,6 +1024,15 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
             <h2>Opening Win Rates</h2>
             <div class="chart-container">
                 <canvas id="openingWinRatesChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div class="stats-grid">
+        <div class="card">
+            <h2>Blunders by Time Pressure</h2>
+            <div class="chart-container">
+                <canvas id="timePressureChart"></canvas>
             </div>
         </div>
     </div>
@@ -1429,6 +1495,59 @@ Provide the response as valid JSON only, no additional text. The common_mistakes
                     }}
                 }}
             }}
+        }});""", f"""
+
+        // Time Pressure Chart
+        new Chart(document.getElementById('timePressureChart'), {{
+            type: 'bar',
+            data: {{
+                labels: {[tp[0] for tp in time_pressure_stats]},
+                datasets: [{{
+                    label: 'Blunder Rate %',
+                    data: {[round(tp[2] * 100 / tp[1], 1) if tp[1] > 0 else 0 for tp in time_pressure_stats]},
+                    backgroundColor: '#e74c3c',
+                    yAxisID: 'y'
+                }}, {{
+                    label: 'Positions Analyzed',
+                    data: {[tp[1] for tp in time_pressure_stats]},
+                    backgroundColor: '#3498db',
+                    yAxisID: 'y1'
+                }}]
+            }},
+            options: {{
+                scales: {{
+                    y: {{
+                        title: {{
+                            display: true,
+                            text: 'Blunder Rate %'
+                        }},
+                        beginAtZero: true
+                    }},
+                    y1: {{
+                        position: 'right',
+                        title: {{
+                            display: true,
+                            text: 'Positions'
+                        }},
+                        grid: {{
+                            drawOnChartArea: false
+                        }},
+                        beginAtZero: true
+                    }}
+                }},
+                plugins: {{
+                    tooltip: {{
+                        callbacks: {{
+                            label: function(context) {{
+                                if (context.dataset.label === 'Blunder Rate %') {{
+                                    return `Blunder Rate: ${{context.raw.toFixed(1)}}%`;
+                                }}
+                                return `Positions: ${{context.raw}}`;
+                            }}
+                        }}
+                    }}
+                }}
+            }}
         }});
     </script>
 </body>
@@ -1466,11 +1585,11 @@ if __name__ == "__main__":
     # print(f"\nTotal games in database: {downloader.count_total_games()}")
     # downloader.clear_analysis()
     # downloader.analyze_all_games(depth=20)
-    downloader.delete_game_analysis(4070)
+    # downloader.delete_game_analysis(4070)
     # downloader.delete_database()
     # downloader.download_all_games(limit=None)
     # downloader.analyze_all_games_with_llm()
     # downloader.analyze_game_with_llm(45) 
-    # downloader.generate_html_report()
+    downloader.generate_html_report()
     # downloader.generate_statistics() 
     # download garmin data as well 
